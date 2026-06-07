@@ -11,10 +11,15 @@ cargo install --path .
 reddit-cli-rs config init
 $EDITOR ~/.config/reddit-cli-rs/config.toml
 reddit-cli-rs auth check
-reddit-cli-rs subreddit context noida --top-limit 10 --recent-limit 10
-reddit-cli-rs search "badminton noida" --subreddit noida --limit 20 --json > posts.json
-reddit-cli-rs candidates search "badminton noida" --subreddit noida --with-comments --match badminton --json > candidates.json
-reddit-cli-rs drafts from-candidates --input candidates.json --subject "Badminton in Noida" --template-file message.md --output drafts.json
+
+SUBREDDIT="community_name"
+QUERY="topic keywords"
+MATCH="important keyword"
+
+reddit-cli-rs subreddit context "$SUBREDDIT" --top-limit 10 --recent-limit 10
+reddit-cli-rs search "$QUERY" --subreddit "$SUBREDDIT" --limit 20 --json > posts.json
+reddit-cli-rs candidates search "$QUERY" --subreddit "$SUBREDDIT" --with-comments --match "$MATCH" --json > candidates.json
+reddit-cli-rs drafts from-candidates --input candidates.json --subject "Quick question" --template-file message.md --output drafts.json
 reddit-cli-rs message send-drafts --input drafts.json --max 5
 ```
 
@@ -69,10 +74,10 @@ REDDIT_SCOPE="identity read submit privatemessages"
 Before posting or messaging around a community, collect context:
 
 ```bash
-reddit-cli-rs subreddit about noida
-reddit-cli-rs subreddit rules noida
-reddit-cli-rs subreddit requirements noida
-reddit-cli-rs subreddit context noida --recent-limit 10 --top-limit 10 --time month
+reddit-cli-rs subreddit about SUBREDDIT
+reddit-cli-rs subreddit rules SUBREDDIT
+reddit-cli-rs subreddit requirements SUBREDDIT
+reddit-cli-rs subreddit context SUBREDDIT --recent-limit 10 --top-limit 10 --time month
 ```
 
 `subreddit context` combines:
@@ -90,7 +95,7 @@ This makes moderator rules, post constraints, and recent community tone visible 
 Search posts:
 
 ```bash
-reddit-cli-rs search "badminton noida" --subreddit noida --sort relevance --limit 20
+reddit-cli-rs search "topic keywords" --subreddit SUBREDDIT --sort relevance --limit 20
 ```
 
 Read comments on a post:
@@ -103,8 +108,8 @@ Extract candidates from one post:
 
 ```bash
 reddit-cli-rs candidates post https://redd.it/POST_ID \
-  --match badminton \
-  --match weekend \
+  --match keyword \
+  --match phrase \
   --min-score 1 \
   --json > candidates.json
 ```
@@ -112,11 +117,11 @@ reddit-cli-rs candidates post https://redd.it/POST_ID \
 Extract candidates from search results and comments:
 
 ```bash
-reddit-cli-rs candidates search "badminton noida" \
-  --subreddit noida \
+reddit-cli-rs candidates search "topic keywords" \
+  --subreddit SUBREDDIT \
   --with-comments \
   --comments-per-post 50 \
-  --match badminton \
+  --match keyword \
   --exclude your_username \
   --json > candidates.json
 ```
