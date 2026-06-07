@@ -1,1 +1,7 @@
 /target
+.env
+*.log
+config.toml
+candidates*.json
+drafts*.json
+sent-log*.json

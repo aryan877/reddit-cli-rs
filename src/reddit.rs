@@ -2,6 +2,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use reqwest::StatusCode;
+use reqwest::header::HeaderMap;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -9,17 +10,75 @@ use tokio::sync::Mutex;
 use zeroize::Zeroizing;
 
 use crate::config::Config;
-use crate::models::{Comment, Listing, Post, PostReport, Thing, User, UserReport};
+use crate::models::{
+    Comment, Listing, Post, PostReport, PostRequirements, RulesResponse, Subreddit,
+    SubredditContext, Thing, User, UserReport,
+};
 use crate::validation::{extract_post_id, validate_subreddit, validate_username};
 
 #[derive(Debug, thiserror::Error)]
 pub enum RedditError {
-    #[error("reddit API returned {status}: {body}")]
-    Api { status: StatusCode, body: String },
-    #[error("reddit rate limit hit")]
-    RateLimited,
-    #[error("reddit authentication failed")]
-    Auth,
+    #[error("reddit API returned {status}: {body}{rate_limit}")]
+    Api {
+        status: StatusCode,
+        body: String,
+        rate_limit: RateLimitInfo,
+    },
+    #[error("reddit rate limit hit{rate_limit}")]
+    RateLimited { rate_limit: RateLimitInfo },
+    #[error("reddit authentication failed ({status}): {body}")]
+    Auth { status: StatusCode, body: String },
+    #[error("reddit compose rejected message: {message}")]
+    Compose { message: String },
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct RateLimitInfo {
+    retry_after: Option<String>,
+    used: Option<String>,
+    remaining: Option<String>,
+    reset: Option<String>,
+}
+
+impl RateLimitInfo {
+    fn from_headers(headers: &HeaderMap) -> Self {
+        Self {
+            retry_after: header_value(headers, "retry-after"),
+            used: header_value(headers, "x-ratelimit-used"),
+            remaining: header_value(headers, "x-ratelimit-remaining"),
+            reset: header_value(headers, "x-ratelimit-reset"),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.retry_after.is_none()
+            && self.used.is_none()
+            && self.remaining.is_none()
+            && self.reset.is_none()
+    }
+}
+
+impl std::fmt::Display for RateLimitInfo {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.is_empty() {
+            return Ok(());
+        }
+
+        let mut parts = Vec::new();
+        if let Some(value) = &self.retry_after {
+            parts.push(format!("retry-after={}s", value));
+        }
+        if let Some(value) = &self.used {
+            parts.push(format!("used={}", value));
+        }
+        if let Some(value) = &self.remaining {
+            parts.push(format!("remaining={}", value));
+        }
+        if let Some(value) = &self.reset {
+            parts.push(format!("reset={}s", value));
+        }
+        write!(formatter, " | rate limit: {}", parts.join(", "))
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -64,6 +123,62 @@ impl RedditClient {
 
     pub async fn me(&self) -> Result<User> {
         self.get("/api/v1/me", &[]).await
+    }
+
+    pub async fn subreddit_about(&self, subreddit: &str) -> Result<Subreddit> {
+        let subreddit = validate_subreddit(subreddit)?;
+        let thing: Thing<Subreddit> = self.get(&format!("/r/{}/about", subreddit), &[]).await?;
+        Ok(thing.data)
+    }
+
+    pub async fn subreddit_rules(
+        &self,
+        subreddit: &str,
+    ) -> Result<Vec<crate::models::SubredditRule>> {
+        let subreddit = validate_subreddit(subreddit)?;
+        let response: RulesResponse = self
+            .get(&format!("/r/{}/about/rules", subreddit), &[])
+            .await?;
+        Ok(response.rules)
+    }
+
+    pub async fn post_requirements(&self, subreddit: &str) -> Result<Option<PostRequirements>> {
+        let subreddit = validate_subreddit(subreddit)?;
+        let endpoint = format!("/api/v1/{}/post_requirements", subreddit);
+        match self.get::<PostRequirements>(&endpoint, &[]).await {
+            Ok(requirements) => Ok(Some(requirements)),
+            Err(error) => {
+                if let Some(RedditError::Api { status, .. }) = error.downcast_ref::<RedditError>()
+                    && (*status == StatusCode::NOT_FOUND || *status == StatusCode::FORBIDDEN)
+                {
+                    return Ok(None);
+                }
+                Err(error)
+            }
+        }
+    }
+
+    pub async fn subreddit_context(
+        &self,
+        subreddit: &str,
+        recent_limit: u8,
+        top_limit: u8,
+        time: &str,
+    ) -> Result<SubredditContext> {
+        let subreddit = validate_subreddit(subreddit)?;
+        let about = self.subreddit_about(&subreddit).await?;
+        let rules = self.subreddit_rules(&subreddit).await?;
+        let post_requirements = self.post_requirements(&subreddit).await?;
+        let recent_posts = self.browse(&subreddit, "new", recent_limit, "day").await?;
+        let top_posts = self.browse(&subreddit, "top", top_limit, time).await?;
+
+        Ok(SubredditContext {
+            subreddit: about,
+            rules,
+            post_requirements,
+            recent_posts,
+            top_posts,
+        })
     }
 
     pub async fn browse(
@@ -187,7 +302,7 @@ impl RedditClient {
         if body.trim().is_empty() {
             anyhow::bail!("body cannot be empty");
         }
-        let _: Value = self
+        let value: Value = self
             .post_form(
                 "/api/compose",
                 &[
@@ -199,6 +314,17 @@ impl RedditClient {
                 ],
             )
             .await?;
+        if let Some(errors) = value
+            .get("json")
+            .and_then(|json| json.get("errors"))
+            .and_then(Value::as_array)
+            && !errors.is_empty()
+        {
+            return Err(RedditError::Compose {
+                message: format_reddit_errors(errors),
+            }
+            .into());
+        }
         Ok(())
     }
 
@@ -254,14 +380,16 @@ impl RedditClient {
 
     async fn decode_response<T: DeserializeOwned>(&self, response: reqwest::Response) -> Result<T> {
         let status = response.status();
+        let rate_limit = RateLimitInfo::from_headers(response.headers());
         if status == StatusCode::TOO_MANY_REQUESTS {
-            return Err(RedditError::RateLimited.into());
+            return Err(RedditError::RateLimited { rate_limit }.into());
         }
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
             return Err(RedditError::Api {
                 status,
                 body: body.chars().take(1000).collect(),
+                rate_limit,
             }
             .into());
         }
@@ -292,8 +420,14 @@ impl RedditClient {
             .send()
             .await?;
 
-        if !response.status().is_success() {
-            return Err(RedditError::Auth.into());
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(RedditError::Auth {
+                status,
+                body: body.chars().take(1000).collect(),
+            }
+            .into());
         }
 
         let data: TokenResponse = response.json().await?;
@@ -302,6 +436,30 @@ impl RedditClient {
         state.token = Some(token.clone());
         Ok(token)
     }
+}
+
+fn header_value(headers: &HeaderMap, name: &str) -> Option<String> {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn format_reddit_errors(errors: &[Value]) -> String {
+    errors
+        .iter()
+        .map(|error| match error.as_array() {
+            Some(parts) => parts
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join(": "),
+            None => error.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 fn collect_comments(value: &Value, depth: u8, max_depth: u8, output: &mut Vec<Comment>) {

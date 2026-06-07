@@ -1,7 +1,6 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
@@ -37,7 +36,7 @@ impl Config {
         let password = env_or_file("REDDIT_PASSWORD", file.password)
             .context("missing REDDIT_PASSWORD or config password")?;
         let scope = env_or_file("REDDIT_SCOPE", file.scope)
-            .unwrap_or_else(|| "identity read privatemessages".to_string());
+            .unwrap_or_else(|| "identity read submit privatemessages".to_string());
         let user_agent = env_or_file("REDDIT_USER_AGENT", file.user_agent).unwrap_or_else(|| {
             format!(
                 "macos:reddit-cli-rs:0.1.0 (by /u/{})",
@@ -56,9 +55,11 @@ impl Config {
     }
 
     pub fn default_path() -> Result<PathBuf> {
-        let dirs = ProjectDirs::from("com", "aryankumar", "reddit-cli-rs")
+        let base = std::env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
             .context("could not determine config directory")?;
-        Ok(dirs.config_dir().join("config.toml"))
+        Ok(base.join("reddit-cli-rs").join("config.toml"))
     }
 
     pub fn write_template(force: bool) -> Result<PathBuf> {
@@ -78,7 +79,7 @@ impl Config {
             username: Some("your_username".to_string()),
             password: Some("your_password".to_string()),
             user_agent: Some("macos:reddit-cli-rs:0.1.0 (by /u/your_username)".to_string()),
-            scope: Some("identity read privatemessages".to_string()),
+            scope: Some("identity read submit privatemessages".to_string()),
         };
         let text = toml::to_string_pretty(&template)?;
         std::fs::write(&path, text)?;
