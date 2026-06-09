@@ -4,6 +4,41 @@ Clean Rust Reddit CLI for subreddit context, Reddit research, candidate extracti
 
 This is built for agentic workflows that need Reddit context without opening the browser every time. It is not a bulk-DM bot: message sends are dry-run by default, draft batches require `approved=true`, and real sends are capped and delayed.
 
+## Agent Contract
+
+`reddit-cli-rs` is intentionally a small Reddit toolbox, not the decision-maker.
+
+Agents should use it to:
+
+- fetch subreddit rules, requirements, posts, comments, and user context
+- emit JSON for downstream reasoning with `--json`
+- extract obvious string-matched candidates when useful
+- render drafts from agent-written templates
+- dry-run or send only explicitly approved messages
+
+Agents should not expect the CLI to:
+
+- infer nuanced intent by itself
+- hardcode a niche or community
+- decide who should be contacted
+- bypass Reddit rules, mod decisions, rate limits, or user consent
+
+For Reddit-native opt-in experiences, use Devvit as a separate app. For local research and reviewed account actions, use this CLI.
+
+## Devvit Or Data API?
+
+Use both, but for different jobs.
+
+| Job | Best Fit |
+| --- | --- |
+| Local agent researches posts/comments and returns JSON | `reddit-cli-rs` with Reddit Data API |
+| Agent prepares reviewed DM drafts from evidence | `reddit-cli-rs` |
+| One-by-one approved private messages from a local account | `reddit-cli-rs`, if API access is approved |
+| Reddit-native opt-in app, forms, scheduled posts, community UI | Devvit |
+| Match scheduling, RSVP/claim spots, waitlists | external site or Devvit app depending on where users opt in |
+
+Devvit handles Reddit auth for installed apps and is the preferred path for Reddit-native apps. It is not a replacement for a local CLI that an agent uses to inspect arbitrary public subreddit context. The CLI should stay a generic external tool; Devvit should be a separate app if you want an opt-in Reddit experience.
+
 ## TL;DR
 
 ```bash

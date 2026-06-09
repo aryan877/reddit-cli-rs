@@ -7,6 +7,12 @@ description: Use when doing Reddit research from CLI, gathering subreddit rules/
 
 Use the local repo at `/Users/aryankumar/reddit-cli-rs`.
 
+## Agent Contract
+
+This CLI is a generic Reddit API toolbox. Keep domain intelligence in the agent, not in the CLI.
+
+Use it to gather context, emit JSON, inspect evidence, render reviewed drafts, and perform dry-run or explicitly approved sends. Do not hardcode niches, communities, outreach goals, or intent scoring into the CLI.
+
 ## Commands
 
 ```bash
@@ -48,6 +54,8 @@ cargo run -- message send-drafts --input drafts.json --max 5 --delay-seconds 60 
 Without `--yes`, message sending is a local dry-run and should not require credentials. Do not build or run bulk unsolicited DM automation.
 
 Batch draft sending only sends entries with `approved: true`, caps `--max` at 25, and requires at least 30 seconds between real sends.
+
+When using this for outreach, first gather subreddit rules and relevant post/comment evidence, then let the agent decide relevance from the JSON output. Only draft messages for users with clear contextual evidence, and keep source URLs attached for review.
 
 ## Config
 
